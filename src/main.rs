@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[command(about = "blocks websites and programs while you get work done", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -24,7 +24,7 @@ enum Commands {
     },
 
     /// changes command to restart NetworkManager, networkctl, etc. this is to update /etc/hosts
-    Network { command: Option<PathBuf> },
+    Network { command: String },
 
     /// starts a new session
     Start {
@@ -43,7 +43,28 @@ enum Commands {
 }
 
 fn main() {
-    println!("Hello, world!");
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Some(Commands::Add { website, program }) => {
+            println!("Website: {:?}\n Program: {:?}\n", website, program);
+        }
+        Some(Commands::Network { command }) => {
+            println!("Command to reset /etc/hosts is: {:?}\n", command)
+        }
+        Some(Commands::Start { time, file }) => {
+            println!("Start a session\n")
+        }
+        Some(Commands::Break) => {
+            println!("Take a break\n");
+        }
+        Some(Commands::Status) => {
+            println!("Give the status\n");
+        }
+        None => {
+            println!("A command was not used\n");
+        }
+    }
 }
 
 /*
