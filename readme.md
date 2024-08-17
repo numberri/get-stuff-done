@@ -6,6 +6,10 @@ This is a project that I wrote for the 2024 UQ Computing Society hackathon. I wr
 
 This will automate changes to crontabs and /etc/hosts so that it will unlock after you get some work done on a coding file, or after a certain amount of time. To use it, you need Linux, and a working cron daemon.
 
+## How do I use it?
+
+To start a session, run `sudo gsd start`, and then add flags for whether you want it to track time or a file. **This needs to be run under sudo** as it writes to /etc/hosts and restarts your network service! 
+
 ## How do I set it up?
 
 Ideally, I want to make it so that you can set up entirely though commands: using `gsd network` to specify a command to be run (under sudo) to restart the network and apply changes to /etc/hosts, and use `gsd add -w` and `gsd add -p` to block websites and programs, respectively. However, this relies on having a `config.toml` file which I haven't gotten around to making a generator for. For this, an example of what this file should look like is provided below:
@@ -36,6 +40,7 @@ programs = [
 
 ## What are the limitations of this?
 
+- You need Linux. Sorry, fellow procrastinators who use Windows.
 - You can only track plaintext files. If you want 100 words written on some essay, then the track may not work for you.
 - On a similar note, this only works for lines, not words at the current moment. This may be changed as I have to write LaTeX files quite often...
 - It's easy to fudge. You can just write meaningless comments to increase line count to unlock websites, and there's nothing stopping you from reverting changes to crontabs and /etc/hosts. If you want this, there's a Perl program out there for you called Lockout: <https://thomer.com/lockout/> which will lock you out of root; this is however a big risk to take. get shit done is safer!
