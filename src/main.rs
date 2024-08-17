@@ -47,7 +47,7 @@ enum Commands {
     /// specifies the path of the program running. this is so that crontabs can point directly to cron.bak.
     Directory { program_dir: PathBuf },
 
-    /// starts a new session. equivlent to gsd withourt any commands.
+    /// starts a new session. takes flags -t "[hours]h[mins]m" or -f [file] -l [lines]
     Start {
         #[arg(short, long)]
         time: Option<String>,
@@ -58,9 +58,6 @@ enum Commands {
         #[arg(short, long)]
         lines: Option<u8>,
     },
-
-    /// pauses current session for 5 minutes
-    Break,
 
     /// for sessions that watch a file, unlock will unlock the session or tell you how many more lines you need to write to unlock
     Unlock,
@@ -126,9 +123,6 @@ fn main() {
             }
             None => println!("Please use either -t or -f [FILE] -l [LINES]")
             }
-        }
-        Some(Commands::Break) => {
-            println!("To be implemented");
         }
         Some(Commands::Unlock) => {
             check_file_unlock();
