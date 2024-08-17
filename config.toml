@@ -1,0 +1,7 @@
+[system]
+network_command = "systemctl restart dhcpcd"
+
+[blocklist]
+websites = ["discord.com", "www.reddit.com", "gbatemp.net", "www.facebook.com", "www.tumblr.com", "tech.lgbt", "x.com"]
+programs = []
+
