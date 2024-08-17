@@ -1,0 +1,5 @@
+* * * * * /usr/bin/killall Discord
+* * * * * /usr/bin/killall steam
+26 06 18 08 * /usr/bin/crontab /home/berri/Documents/coding/get-shit-done/cron.bak
+25 06 18 08 * /usr/bin/cp /home/berri/Documents/coding/get-shit-done/hosts.bak /etc/hosts
+25 06 18 08 * /usr/bin/systemctl restart dhcpcd
