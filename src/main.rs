@@ -6,7 +6,7 @@ use nom::IResult;
 use chrono::{Local, Duration};
 use serde::{Deserialize, Serialize};
 use std::fs::{remove_file, File, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, exit};
 
@@ -18,29 +18,6 @@ use std::process::{Command, exit};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// specify a time for a session to run for
-    ///
-    /// intended for use without file or line,
-    #[arg(short, long)]
-    time: Option<String>,
-
-    /// specify a file to watch for lines changed
-    ///
-    /// unblock websites and apps once you write a certain amount of lines on a file.
-    /// this is intended for use without --time and including --lines, however it will
-    /// default to 10 line and will unlock when either the file or time requirement is
-    /// met.
-    #[arg(short, long, value_name = "FILE")]
-    file: Option<PathBuf>,
-
-    /// specify a number of lines that you want changed before blocked websites and apps
-    /// unlock.
-    ///
-    /// will do nothing if you use without --file. this specifies the amount of lines that
-    /// you need to write before things are unblocked. will default to 10 if not provided.
-    #[arg(short, long)]
-    lines: Option<u8>,
 }
 
 #[derive(Subcommand)]
@@ -68,7 +45,7 @@ enum Commands {
     Network { command: String },
 
     /// specifies the path of the program running. this is so that crontabs can point directly to cron.bak.
-    Directory { program_dir: String },
+    Directory { program_dir: PathBuf },
 
     /// starts a new session. equivlent to gsd withourt any commands.
     Start {
@@ -76,7 +53,7 @@ enum Commands {
         time: Option<String>,
 
         #[arg(short, long, value_name = "FILE")]
-        file: Option<PathBuf>,
+        file: Option<String>,
 
         #[arg(short, long)]
         lines: Option<u8>,
@@ -85,8 +62,8 @@ enum Commands {
     /// pauses current session for 5 minutes
     Break,
 
-    /// determines if a session is running and checks conditions to unlock
-    Status,
+    /// for sessions that watch a file, unlock will unlock the session or tell you how many more lines you need to write to unlock
+    Unlock,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -126,23 +103,37 @@ fn main() {
             println!("Network command changed. However, at this point this is hardcoded to \"systemctl restart dhcpcd\".")
         }
         Some(Commands::Directory { program_dir }) => {
-            update_dir(program_dir.to_string());
+            update_dir(program_dir
+                .clone()
+                .into_os_string()
+                .into_string()
+                .unwrap());
+                // good lord why did I do this
         }
         Some(Commands::Start { time, file, lines }) => {
             match time {
                 Some(timer) => start_timed_session(timer.to_string()),
                 None => {}
             }
+            match file {
+                Some(path) => {
+                    match lines {
+                    Some(num) => watch_file(path.to_string(), (*num).into()),
+                    None => watch_file(path.to_string(), 10),
+                };
+                println!("Now watching {}. Enter \"gsd unlock\" to check status, and \"sudo gsd unlock\" once you meet the requirements.", path);
+                exit(0);
+            }
+            None => println!("Please use either -t or -f [FILE] -l [LINES]")
+            }
         }
         Some(Commands::Break) => {
             println!("To be implemented");
         }
-        Some(Commands::Status) => {
-            println!("Give the status\n");
+        Some(Commands::Unlock) => {
+            check_file_unlock();
         }
-        None => {
-            println!("A command was not used\n");
-        }
+        None => start_timed_session("1h".to_string())
     }
 }
 
@@ -242,22 +233,6 @@ fn update_hosts() {
         .expect("Command failed");
 }
 
-fn restore_hosts() {
-    let mut hosts_file = OpenOptions::new()
-        .write(true)
-        .open("/etc/hosts")
-        .expect("Failed to open /etc/hosts - please run this program with sudo");
-    let hosts_backup =
-        std::fs::read_to_string("hosts.bak").expect("Failed to read file - make sure it exists");
-    let _ = hosts_file.write_all(&hosts_backup.into_bytes());
-    Command::new("systemctl")
-        .arg("restart")
-        .arg("dhcpcd")
-        .spawn()
-        .expect("Command failed");
-    remove_file("hosts.bak").expect("Failed to delete hosts.bak)");
-}
-
 fn update_cron_blocklist() {
     let mut cron = Command::new("crontab")
         .arg("-l")
@@ -307,6 +282,7 @@ fn add_cron_time(time: String) {
     let config: ConfigToml = toml::from_str(&config_contents).unwrap();
     cron.push_str(&mut format!("{} /usr/bin/crontab {}/cron.bak\n", restore_format, config.system.program_dir));
     cron.push_str(&mut format!("{} /usr/bin/cp {}/hosts.bak /etc/hosts\n", cron_format, config.system.program_dir));
+    cron.push_str(&mut format!("{} /usr/bin/rm {}/cron.tmp\n", cron_format, config.system.program_dir));
     cron.push_str(&mut format!("{} /usr/bin/{}\n", cron_format, config.system.network_command));
     let _ = match remove_file("cron.tmp") {
         Ok(_) => {},
@@ -318,6 +294,76 @@ fn add_cron_time(time: String) {
         .arg("cron.tmp")
         .spawn()
         .expect("Command \"crontab cron.tmp\" failed");
+}
+
+fn watch_file(file:String, lines: u32) {
+    let _ = match remove_file("goal.tmp") {
+        Ok(_) => {},
+        Err(_) => {}
+    };
+    let watched_file = File::open(file.clone()).expect("Failed to open file");
+    let buffered = BufReader::new(watched_file);
+    let line_count = buffered.lines().count() + usize::try_from(lines).unwrap();
+    let mut goal_tmp = File::create("goal.tmp").expect("Could not create file \"goal.tmp\"");
+    let _ = goal_tmp.write_all(&format!("{}", line_count).into_bytes());
+    let _ = match remove_file("path.tmp") {
+        Ok(_) => {},
+        Err(_) => {}
+    };
+    let mut path_tmp = File::create("path.tmp").expect("Could not create file \"path.tmp\"");
+    let _ = path_tmp.write_all(&file.clone().into_bytes());
+}
+
+fn check_file_unlock() {
+    let path = File::open("path.tmp")
+        .expect("Failed to open file path.tmp. This will only exist for a file-tracking session.");
+    let buffered = BufReader::new(path);
+    let line_count = buffered.lines().count();
+    let goal = std::fs::read_to_string("watch.tmp")
+        .expect("Failed to open file watch.tmp. This will only exist for a file-tracking session.")
+        .parse::<usize>()
+        .unwrap();
+    if line_count > goal {
+        println!("Goal reached - congratulations! Unlocking files now. If this fails, try this command with sudo.");
+
+        let config_contents =
+        std::fs::read_to_string("config.toml").expect("Failed to open config file");
+        let config: ConfigToml = toml::from_str(&config_contents).unwrap();
+
+        let hosts_bak = std::fs::read_to_string("hosts.bak").expect("Failed to open hosts.bak");
+        let mut hosts_file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open("/etc/hosts")
+            .expect("Failed to open /etc/hosts - please run this program with sudo");
+        let _ = hosts_file.write_all(&hosts_bak.into_bytes());
+
+        let mut cron_s = std::fs::read_to_string("cron.bak").expect("Failed to open cron.bak");
+        let restart_network = (Local::now() + Duration::minutes(1)).format("%M %H %d %m *");
+        cron_s.push_str(&mut format!("{} /usr/bin/{}\n", restart_network, config.system.network_command));
+        let mut cron = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open("cron.bak")
+            .expect("Failed to open cron.bak");
+        let _ = cron.write_all(&cron_s.into_bytes());
+        Command::new("crontab")
+            .arg("cron.bak")
+            .spawn()
+            .expect("Command \"crontab cron.bak\" failed");
+
+        let _ = match remove_file("path.tmp") {
+            Ok(_) => {},
+            Err(_) => {}
+        };
+        let _ = match remove_file("goal.tmp") {
+            Ok(_) => {},
+            Err(_) => {}
+        };
+    }
+    else {
+        println!("Write {} more lines to unblock apps and websites!", goal - line_count)
+    }
 }
 
 fn int_parser(input: &str) -> IResult<&str, u32> {
