@@ -315,20 +315,17 @@ fn watch_file(file:String, lines: u32) {
 }
 
 fn check_file_unlock() {
-    let path = File::open("path.tmp")
+    let path = std::fs::read_to_string("path.tmp")
         .expect("Failed to open file path.tmp. This will only exist for a file-tracking session.");
-    let buffered = BufReader::new(path);
+    let watched = File::open(path).expect("Failed to open watched file");
+    let buffered = BufReader::new(watched);
     let line_count = buffered.lines().count();
-    let goal = std::fs::read_to_string("watch.tmp")
-        .expect("Failed to open file watch.tmp. This will only exist for a file-tracking session.")
+    let goal = std::fs::read_to_string("goal.tmp")
+        .expect("Failed to open file goal.tmp. This will only exist for a file-tracking session.")
         .parse::<usize>()
         .unwrap();
-    if line_count > goal {
+    if line_count >= goal {
         println!("Goal reached - congratulations! Unlocking files now. If this fails, try this command with sudo.");
-
-        let config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
-        let config: ConfigToml = toml::from_str(&config_contents).unwrap();
 
         let hosts_bak = std::fs::read_to_string("hosts.bak").expect("Failed to open hosts.bak");
         let mut hosts_file = OpenOptions::new()
@@ -338,25 +335,27 @@ fn check_file_unlock() {
             .expect("Failed to open /etc/hosts - please run this program with sudo");
         let _ = hosts_file.write_all(&hosts_bak.into_bytes());
 
-        let mut cron_s = std::fs::read_to_string("cron.bak").expect("Failed to open cron.bak");
-        let restart_network = (Local::now() + Duration::minutes(1)).format("%M %H %d %m *");
-        cron_s.push_str(&mut format!("{} /usr/bin/{}\n", restart_network, config.system.network_command));
-        let mut cron = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open("cron.bak")
-            .expect("Failed to open cron.bak");
-        let _ = cron.write_all(&cron_s.into_bytes());
         Command::new("crontab")
             .arg("cron.bak")
             .spawn()
             .expect("Command \"crontab cron.bak\" failed");
+        // again, I'm lazy right now so I shall have this work on my machine and have it work on
+        // other people's machines later
+        Command::new("systemctl")
+        .arg("restart")
+        .arg("dhcpcd")
+        .spawn()
+        .expect("Command failed");
 
         let _ = match remove_file("path.tmp") {
             Ok(_) => {},
             Err(_) => {}
         };
         let _ = match remove_file("goal.tmp") {
+            Ok(_) => {},
+            Err(_) => {}
+        };
+        let _ = match remove_file("cron.bak") {
             Ok(_) => {},
             Err(_) => {}
         };
