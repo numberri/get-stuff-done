@@ -1,15 +1,14 @@
+use chrono::{Duration, Local};
 use clap::{Parser, Subcommand};
 use nom::character::complete::{digit1, one_of};
 use nom::combinator::{map_res, opt};
 use nom::sequence::pair;
 use nom::IResult;
-use chrono::{Local, Duration};
 use serde::{Deserialize, Serialize};
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Command, exit};
-
+use std::process::{exit, Command};
 
 #[derive(Parser)]
 #[command(name = "get shit done")]
@@ -100,12 +99,8 @@ fn main() {
             println!("Network command changed. However, at this point this is hardcoded to \"systemctl restart dhcpcd\".")
         }
         Some(Commands::Directory { program_dir }) => {
-            update_dir(program_dir
-                .clone()
-                .into_os_string()
-                .into_string()
-                .unwrap());
-                // good lord why did I do this
+            update_dir(program_dir.clone().into_os_string().into_string().unwrap());
+            // good lord why did I do this
         }
         Some(Commands::Start { time, file, lines }) => {
             match time {
@@ -115,19 +110,19 @@ fn main() {
             match file {
                 Some(path) => {
                     match lines {
-                    Some(num) => watch_file(path.to_string(), (*num).into()),
-                    None => watch_file(path.to_string(), 10),
-                };
-                println!("Now watching {}. Enter \"gsd unlock\" to check status, and \"sudo gsd unlock\" once you meet the requirements.", path);
-                exit(0);
-            }
-            None => println!("Please use either -t or -f [FILE] -l [LINES]")
+                        Some(num) => watch_file(path.to_string(), (*num).into()),
+                        None => watch_file(path.to_string(), 10),
+                    };
+                    println!("Now watching {}. Enter \"gsd unlock\" to check status, and \"sudo gsd unlock\" once you meet the requirements.", path);
+                    exit(0);
+                }
+                None => println!("Please use either -t or -f [FILE] -l [LINES]"),
             }
         }
         Some(Commands::Unlock) => {
             check_file_unlock();
         }
-        None => start_timed_session("1h".to_string())
+        None => start_timed_session("1h".to_string()),
     }
 }
 
@@ -209,7 +204,7 @@ fn update_hosts() {
         .expect("Failed to open /etc/hosts - please run this program with sudo");
     let mut hosts = std::fs::read_to_string("/etc/hosts").expect("Failed to read file");
     let _ = match remove_file("hosts.bak") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let mut hosts_backup = File::create("hosts.bak").expect("Could not create file");
@@ -218,11 +213,22 @@ fn update_hosts() {
         hosts.push_str(&format!("\n127.0.0.1 {}", site))
     }
     let _ = hosts_file.write_all(&hosts.clone().into_bytes());
-    // I'm lazy right now so I shall have this work on my machine and have it work on
-    // other people's machines later
-    Command::new("systemctl")
-        .arg("restart")
-        .arg("dhcpcd")
+    // update, works on other people's machines now (hopefully)
+    let _ = match remove_file("restart.sh") {
+        Ok(_) => {}
+        Err(_) => {}
+    };
+    let mut restart = File::create("restart.sh").expect("Couldn't create restart.sh");
+    let _ = restart
+        .write_all(&format!("#!/bin/bash\n\n{}", config.system.network_command).into_bytes());
+    Command::new("chmod")
+        .arg("+x")
+        .arg("restart.sh")
+        .spawn()
+        .expect("Command chmod failed");
+    Command::new("bash")
+        .arg("-c")
+        .arg("./restart.sh")
         .spawn()
         .expect("Command failed");
 }
@@ -234,7 +240,7 @@ fn update_cron_blocklist() {
         .expect("Failed to run command: \"crontab -l\"")
         .stdout;
     let _ = match remove_file("cron.bak") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let mut cron_backup = File::create("cron.bak").expect("Could not create file \"cron.bak\"");
@@ -242,11 +248,11 @@ fn update_cron_blocklist() {
     let config_contents =
         std::fs::read_to_string("config.toml").expect("Failed to open config file");
     let config: ConfigToml = toml::from_str(&config_contents).unwrap();
-    for program in &config.blocklist.programs{
+    for program in &config.blocklist.programs {
         cron.append(&mut format!("* * * * * /usr/bin/killall {}\n", program).into_bytes())
-    };
+    }
     let _ = match remove_file("cron.tmp") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let mut cron_tmp = File::create("cron.tmp").expect("Could not create file \"cron.tmp\"");
@@ -265,21 +271,31 @@ fn add_cron_time(time: String) {
         .stdout;
     let mut cron = String::from_utf8(cron_u).unwrap();
     let (h, m) = parse_time(time);
-    let unblock_dt = Local::now()
-        + Duration::minutes(i64::from(m))
-        + Duration::hours(i64::from(h));
+    let unblock_dt = Local::now() + Duration::minutes(i64::from(m)) + Duration::hours(i64::from(h));
     let restore_cron = unblock_dt + Duration::minutes(1);
     let cron_format = format!("{} *", unblock_dt.format("%M %H %d %m"));
     let restore_format = format!("{} *", restore_cron.format("%M %H %d %m"));
     let config_contents =
         std::fs::read_to_string("config.toml").expect("Failed to open config file");
     let config: ConfigToml = toml::from_str(&config_contents).unwrap();
-    cron.push_str(&mut format!("{} /usr/bin/crontab {}/cron.bak\n", restore_format, config.system.program_dir));
-    cron.push_str(&mut format!("{} /usr/bin/cp {}/hosts.bak /etc/hosts\n", cron_format, config.system.program_dir));
-    cron.push_str(&mut format!("{} /usr/bin/rm {}/cron.tmp\n", cron_format, config.system.program_dir));
-    cron.push_str(&mut format!("{} /usr/bin/{}\n", cron_format, config.system.network_command));
+    cron.push_str(&mut format!(
+        "{} /usr/bin/crontab {}/cron.bak\n",
+        restore_format, config.system.program_dir
+    ));
+    cron.push_str(&mut format!(
+        "{} /usr/bin/cp {}/hosts.bak /etc/hosts\n",
+        cron_format, config.system.program_dir
+    ));
+    cron.push_str(&mut format!(
+        "{} /usr/bin/rm {}/cron.tmp\n",
+        cron_format, config.system.program_dir
+    ));
+    cron.push_str(&mut format!(
+        "{} /usr/bin/{}\n",
+        cron_format, config.system.network_command
+    ));
     let _ = match remove_file("cron.tmp") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let mut cron_tmp = File::create("cron.tmp").expect("Could not create file \"cron.tmp\"");
@@ -290,9 +306,9 @@ fn add_cron_time(time: String) {
         .expect("Command \"crontab cron.tmp\" failed");
 }
 
-fn watch_file(file:String, lines: u32) {
+fn watch_file(file: String, lines: u32) {
     let _ = match remove_file("goal.tmp") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let watched_file = File::open(file.clone()).expect("Failed to open file");
@@ -301,7 +317,7 @@ fn watch_file(file:String, lines: u32) {
     let mut goal_tmp = File::create("goal.tmp").expect("Could not create file \"goal.tmp\"");
     let _ = goal_tmp.write_all(&format!("{}", line_count).into_bytes());
     let _ = match remove_file("path.tmp") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => {}
     };
     let mut path_tmp = File::create("path.tmp").expect("Could not create file \"path.tmp\"");
@@ -333,29 +349,44 @@ fn check_file_unlock() {
             .arg("cron.bak")
             .spawn()
             .expect("Command \"crontab cron.bak\" failed");
-        // again, I'm lazy right now so I shall have this work on my machine and have it work on
-        // other people's machines later
-        Command::new("systemctl")
-        .arg("restart")
-        .arg("dhcpcd")
-        .spawn()
-        .expect("Command failed");
-
+        // LETSGOOOO THIS SHOULD WORK ON OTHER PEOPLE'S MACHINES NOW
+        let _ = match remove_file("restart.sh") {
+            Ok(_) => {}
+            Err(_) => {}
+        };
+        let mut restart = File::create("restart.sh").expect("Couldn't create restart.sh");
+        let config_contents =
+            std::fs::read_to_string("config.toml").expect("Failed to open config file");
+        let config: ConfigToml = toml::from_str(&config_contents).unwrap();
+        let _ = restart
+            .write_all(&format!("#!/bin/bash\n\n{}", config.system.network_command).into_bytes());
+        Command::new("chmod")
+            .arg("+x")
+            .arg("restart.sh")
+            .spawn()
+            .expect("Command chmod failed");
+        Command::new("bash")
+            .arg("-c")
+            .arg("./restart.sh")
+            .spawn()
+            .expect("Command bash failed");
         let _ = match remove_file("path.tmp") {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {}
         };
         let _ = match remove_file("goal.tmp") {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {}
         };
         let _ = match remove_file("cron.bak") {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {}
         };
-    }
-    else {
-        println!("Write {} more lines to unblock apps and websites!", goal - line_count)
+    } else {
+        println!(
+            "Write {} more lines to unblock apps and websites!",
+            goal - line_count
+        )
     }
 }
 
@@ -375,7 +406,7 @@ fn parse_time(input: String) -> (u32, u32) {
     let h = hours.map(|t| t.0);
     let m = minutes.map(|t| t.0);
 
-    (h.unwrap_or_default(),m.unwrap_or_default())
+    (h.unwrap_or_default(), m.unwrap_or_default())
 }
 
 fn start_timed_session(time: String) {

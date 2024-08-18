@@ -1,5 +1,4 @@
 # get shit done: blocking websites and programs so you can, well, get shit done
-**NOTE** This currently only works on my machine. Unless you use systemd and dhcpcd, you will run into errors here. This is because I did this in 48 hours and sometimes hard-coding something is a lot easier.
 
 ## What is this?
 
@@ -9,6 +8,7 @@ This will automate changes to crontabs and /etc/hosts so that it will unlock aft
 
 ## How do I use it?
 
+First, make this using cargo. I'm very very new to cargo, `cargo build -r` *should* do what you need. You also need to set up a config file (detailed below) before using the app.
 To start a session, run `sudo ./gsd start` (or replace `./gsd` with whatever the name of the binary is), and then add flags for whether you want it to track time or a file. **This needs to be run under sudo** as it writes to /etc/hosts and restarts your network service! 
 
 ## How do I set it up?
@@ -50,7 +50,7 @@ programs = [
 
 ## What are some improvements that could be made here?
 - It's way too easy to break out of. There is nothing stopping you from going and editing crontabs and /etc/hosts yourself - I just hope that it's too much effort for you absentmindedly browsing the web. That being said, I can add anti-editing measures for particularly determined procrastinators.
-- It, well, only works on my machine right now (see top of readme). This is because it's hardcoded to send the command "systemctl restart dhcpcd" at two places, and I didn't have time to fix this up.
+- If you don't have a config file, the program won't work. It's not too hard to make, but it'd be nicer if it automatically made a config file if you don't have one.
 - I could make it possible to track more than just lines in a plaintext file - reading words from a WYSISYG document format and reading words from a plaintext file are both things that would be useful if implemented.
 - This doesn't have a GUI. It's not neccesary, but it'd be cool.
 - I could add a log of when it's used, so you can track how much time you've spent working on a project.
