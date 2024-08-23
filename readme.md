@@ -9,7 +9,7 @@ This will automate changes to crontabs and /etc/hosts so that it will unlock aft
 ## How do I use it?
 
 First, make this using cargo. I'm very very new to cargo, `cargo build -r` *should* do what you need. You also need to set up a config file (detailed below) before using the app.
-To start a session, run `./gsd start` (or replace `./gsd` with whatever the name of the binary is), and then add flags for whether you want it to track time or a file. **This o longer needs to be run under sudo, but will explain it is calling sudo and ask for a password** as it writes to /etc/hosts, updates the root crontab and restarts your network service.
+To start a session, run `./gsd start` (or replace `./gsd` with whatever the name of the binary is), and then add flags for whether you want it to track time or a file. **This no longer needs to be run under sudo, but will explain it is calling sudo and ask for a password** as it writes to /etc/hosts, updates the root crontab and restarts your network service.
 
 ## How do I set it up?
 
