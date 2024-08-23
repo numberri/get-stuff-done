@@ -7,3 +7,4 @@ hosts.bak
 restart.sh
 goal.tmp
 path.tmp
+Cargo.lock
