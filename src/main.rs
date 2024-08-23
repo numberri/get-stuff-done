@@ -5,14 +5,16 @@ use nom::combinator::{map_res, opt};
 use nom::sequence::pair;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
+use shellexpand;
+use std::str;
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{exit, Command};
+use std::process::{exit, Command, Stdio};
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "get shit done")]
-#[command(version = "1.0")]
+#[command(version = "1.1")]
 #[command(about = "blocks websites and programs while you get work done", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -43,9 +45,6 @@ enum Commands {
     /// 'sudo systemctl restart dhcpcd'.
     Network { command: String },
 
-    /// specifies the path of the program running. this is so that crontabs can point directly to cron.bak.
-    Directory { program_dir: PathBuf },
-
     /// starts a new session. takes flags -t "[hours]h[mins]m" or -f [file] -l [lines]
     Start {
         #[arg(short, long)]
@@ -71,7 +70,6 @@ struct ConfigToml {
 #[derive(Deserialize, Serialize)]
 struct System {
     network_command: String,
-    program_dir: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -96,15 +94,11 @@ fn main() {
         }
         Some(Commands::Network { command }) => {
             update_network(command.to_string());
-            println!("Network command changed. However, at this point this is hardcoded to \"systemctl restart dhcpcd\".")
-        }
-        Some(Commands::Directory { program_dir }) => {
-            update_dir(program_dir.clone().into_os_string().into_string().unwrap());
-            // good lord why did I do this
+            println!("Network command changed.")
         }
         Some(Commands::Start { time, file, lines }) => {
             match time {
-                Some(timer) => start_timed_session(timer.to_string()),
+                Some(timer) => start_timed_session(timer),
                 None => {}
             }
             match file {
@@ -113,56 +107,58 @@ fn main() {
                         Some(num) => watch_file(path.to_string(), (*num).into()),
                         None => watch_file(path.to_string(), 10),
                     };
+                    clean_file(&shellexpand::tilde("~/.config/gsd/session.sh").to_string());
+                    update_hosts();
+                    update_cron_blocklist();
+                    run_sudo_script(&shellexpand::tilde("~/.config/gsd/session.sh").to_string());
                     println!("Now watching {}. Enter \"gsd unlock\" to check status, and \"sudo gsd unlock\" once you meet the requirements.", path);
                     exit(0);
                 }
-                None => println!("Please use either -t or -f [FILE] -l [LINES]"),
+                None => println!("Please use either -t [HOURS]h[MINUTES]m or -f [FILE] -l [LINES]"),
             }
         }
         Some(Commands::Unlock) => {
             check_file_unlock();
         }
-        None => start_timed_session("1h".to_string()),
+        None => start_timed_session("1h"),
     }
 }
 
 //fn init_config() {}
 
+fn open_config() -> ConfigToml {
+    let path = shellexpand::tilde("~/.config/gsd/config.toml").to_string();
+    let contents = std::fs::read_to_string(path).expect("Config file most likely does not exist");
+    // todo: make this create a default config on error
+    toml::from_str(&contents).expect("Invalid config file")
+}
+
 // todo, add actual error handling instead of .unwrap() .unwrap() .unwrap()
 fn add_to_blocklist(mode: char, block: String) {
     let mut config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
+        std::fs::read_to_string(shellexpand::tilde("~/.config/gsd/config.toml").to_string()).expect("Failed to open config file");
     let mut config: ConfigToml = toml::from_str(&config_contents).unwrap();
     if mode == 'w' {
         let websites: &mut Vec<String> = &mut config.blocklist.websites;
         websites.push(block);
-        config_contents = toml::to_string(&config).unwrap();
-        let mut config_file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open("config.toml")
-            .unwrap();
-        if let Err(e) = writeln!(config_file, "{}", config_contents) {
-            eprintln!("Couldn't write to file: {}", e);
-        }
     } else if mode == 'p' {
         let programs: &mut Vec<String> = &mut config.blocklist.programs;
         programs.push(block);
-        config_contents = toml::to_string(&config).unwrap();
-        let mut config_file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open("config.toml")
-            .unwrap();
-        if let Err(e) = writeln!(config_file, "{}", config_contents) {
-            eprintln!("Couldn't write to file: {}", e);
-        }
+    } else {
+        panic!("Option must be -w [website] or -p [program process name]");
     }
+    config_contents = toml::to_string(&config).unwrap();
+    let mut config_file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(format!("{}", shellexpand::tilde("~/.config/gsd/config.toml").to_string()))
+        .unwrap();
+    write_line(&mut config_file, &config_contents);
 }
 
 fn update_network(cmd: String) {
     let mut config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
+        std::fs::read_to_string(shellexpand::tilde("~/.config/gsd/config.toml").to_string()).expect("Failed to open config file");
     let mut config: ConfigToml = toml::from_str(&config_contents).unwrap();
     let network_command: &mut String = &mut config.system.network_command;
     *network_command = cmd;
@@ -170,218 +166,109 @@ fn update_network(cmd: String) {
     let mut config_file = OpenOptions::new()
         .write(true)
         .truncate(true)
-        .open("config.toml")
+        .open(format!("{}", shellexpand::tilde("~/.config/gsd/config.toml").to_string()))
         .unwrap();
-    if let Err(e) = writeln!(config_file, "{}", config_contents) {
-        eprintln!("Couldn't write to file: {}", e);
-    }
-}
-
-fn update_dir(dir: String) {
-    let mut config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
-    let mut config: ConfigToml = toml::from_str(&config_contents).unwrap();
-    let program_dir: &mut String = &mut config.system.program_dir;
-    *program_dir = dir;
-    config_contents = toml::to_string(&config).unwrap();
-    let mut config_file = OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open("config.toml")
-        .unwrap();
-    if let Err(e) = writeln!(config_file, "{}", config_contents) {
-        eprintln!("Couldn't write to file: {}", e);
-    }
+    write_line(&mut config_file, &config_contents);
 }
 
 fn update_hosts() {
-    let config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
-    let config: ConfigToml = toml::from_str(&config_contents).unwrap();
-    let mut hosts_file = OpenOptions::new()
-        .write(true)
-        .open("/etc/hosts")
-        .expect("Failed to open /etc/hosts - please run this program with sudo");
-    let mut hosts = std::fs::read_to_string("/etc/hosts").expect("Failed to read file");
-    let _ = match remove_file("hosts.bak") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut hosts_backup = File::create("hosts.bak").expect("Could not create file");
-    let _ = hosts_backup.write_all(&hosts.clone().into_bytes());
+    let config = open_config();
+    let hosts = std::fs::read_to_string("/etc/hosts").expect("Failed to read /etc/hosts");
+    clean_file("/tmp/gsd/hosts.bak");
+    let mut hosts_backup = make_file("/tmp/gsd", "hosts.bak");
+    hosts_backup.write_all(&hosts.clone().into_bytes());
+    let mut session_script = make_file(&shellexpand::tilde("~/.config/gsd").to_string(), "session.sh");
+    write_line(&mut session_script, "#!/bin/bash\n");
     for site in &config.blocklist.websites {
-        hosts.push_str(&format!("\n127.0.0.1 {}", site))
+        write_line(&mut session_script, &format!("echo \"127.0.0.1 {}\" >> /etc/hosts", site));
     }
-    let _ = hosts_file.write_all(&hosts.clone().into_bytes());
-    // update, works on other people's machines now (hopefully)
-    let _ = match remove_file("restart.sh") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut restart = File::create("restart.sh").expect("Couldn't create restart.sh");
-    let _ = restart
-        .write_all(&format!("#!/bin/bash\n\n{}", config.system.network_command).into_bytes());
-    Command::new("chmod")
-        .arg("+x")
-        .arg("restart.sh")
-        .spawn()
-        .expect("Command chmod failed");
-    Command::new("bash")
-        .arg("-c")
-        .arg("./restart.sh")
-        .spawn()
-        .expect("Command failed");
+    write_line(&mut session_script, &config.system.network_command);
 }
 
 fn update_cron_blocklist() {
-    let mut cron = Command::new("crontab")
+    let cron = Command::new("crontab")
         .arg("-l")
         .output()
         .expect("Failed to run command: \"crontab -l\"")
         .stdout;
-    let _ = match remove_file("cron.bak") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut cron_backup = File::create("cron.bak").expect("Could not create file \"cron.bak\"");
-    let _ = cron_backup.write_all(&cron.clone());
-    let config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
-    let config: ConfigToml = toml::from_str(&config_contents).unwrap();
+    clean_file("/tmp/gsd/cron.bak");
+    clean_file("/tmp/gsd/cron.tmp");
+    let mut cron_backup = make_file("/tmp/gsd", "cron.bak");
+    cron_backup.write_all(&cron);
+    let mut cron_tmp = make_file("/tmp/gsd", "cron.tmp");
+    cron_tmp.write_all(&cron);
+    let config: ConfigToml = open_config();
+    let mut session_script = make_file(&shellexpand::tilde("~/.config/gsd").to_string(), "session.sh");
+    write_line(&mut session_script, "# the following lines are being appended to the root crontab");
     for program in &config.blocklist.programs {
-        cron.append(&mut format!("* * * * * /usr/bin/killall {}\n", program).into_bytes())
+        let killall = &find_cmd("killall");
+        write_line(&mut cron_tmp, &format!("* * * * * {} {}", killall, program));
+        write_line(&mut session_script, &format!("# * * * * * {} {}", killall, program));
     }
-    let _ = match remove_file("cron.tmp") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut cron_tmp = File::create("cron.tmp").expect("Could not create file \"cron.tmp\"");
-    let _ = cron_tmp.write_all(&cron.clone());
-    Command::new("crontab")
-        .arg("cron.tmp")
-        .spawn()
-        .expect("Command \"crontab cron.tmp\" failed");
 }
 
-fn add_cron_time(time: String) {
-    let cron_u = Command::new("crontab")
-        .arg("-l")
-        .output()
-        .expect("Failed to run command: \"crontab -l\"")
-        .stdout;
-    let mut cron = String::from_utf8(cron_u).unwrap();
+fn add_cron_time(time: &str) {
+    // will always be used after cron_blocklist so cron.tmp already exists
     let (h, m) = parse_time(time);
     let unblock_dt = Local::now() + Duration::minutes(i64::from(m)) + Duration::hours(i64::from(h));
     let restore_cron = unblock_dt + Duration::minutes(1);
     let cron_format = format!("{} *", unblock_dt.format("%M %H %d %m"));
     let restore_format = format!("{} *", restore_cron.format("%M %H %d %m"));
-    let config_contents =
-        std::fs::read_to_string("config.toml").expect("Failed to open config file");
-    let config: ConfigToml = toml::from_str(&config_contents).unwrap();
-    cron.push_str(&mut format!(
-        "{} /usr/bin/crontab {}/cron.bak\n",
-        restore_format, config.system.program_dir
-    ));
-    cron.push_str(&mut format!(
-        "{} /usr/bin/cp {}/hosts.bak /etc/hosts\n",
-        cron_format, config.system.program_dir
-    ));
-    cron.push_str(&mut format!(
-        "{} /usr/bin/rm {}/cron.tmp\n",
-        cron_format, config.system.program_dir
-    ));
-    cron.push_str(&mut format!(
-        "{} /usr/bin/{}\n",
-        cron_format, config.system.network_command
-    ));
-    let _ = match remove_file("cron.tmp") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut cron_tmp = File::create("cron.tmp").expect("Could not create file \"cron.tmp\"");
-    let _ = cron_tmp.write_all(&cron.clone().into_bytes());
-    Command::new("crontab")
-        .arg("cron.tmp")
-        .spawn()
-        .expect("Command \"crontab cron.tmp\" failed");
+    let config: ConfigToml = open_config();
+
+    let mut session_script = make_file(&shellexpand::tilde("~/.config/gsd").to_string(), "session.sh");
+    let mut cron_tmp = make_file("/tmp/gsd", "cron.tmp");
+
+    let cron_cmds = vec![
+        format!("# {} {} /tmp/gsd/hosts.bak /etc/hosts", cron_format, find_cmd("cp")),
+        format!("# {} /usr/bin/{} /tmp/gsd/hosts.bak /etc/hosts", cron_format, config.system.network_command),
+        format!("# {} {} /tmp/gsd/cron.tmp", cron_format, find_cmd("rm")),
+        format!("# {} {} /tmp/gsd/cron.bak", restore_format, find_cmd("crontab"))
+        ];
+
+    for cmd in cron_cmds {
+        write_line(&mut session_script, &cmd);
+        write_line(&mut cron_tmp, &cmd);
+    }
 }
 
 fn watch_file(file: String, lines: u32) {
-    let _ = match remove_file("goal.tmp") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let watched_file = File::open(file.clone()).expect("Failed to open file");
+    let files = vec!["path.tmp", "goal.tmp", "cron.bak"];
+    for f in files {
+        clean_file(&format!("/tmp/gsd/{}", f));
+    }
+    let watched_file = File::open(&file).expect("Failed to open file");
     let buffered = BufReader::new(watched_file);
+    // todo : It would be good to add some error handling here on the off chance that u32 and usize are not
+    // compatible. It is on my computer but I don't want to assume that
     let line_count = buffered.lines().count() + usize::try_from(lines).unwrap();
-    let mut goal_tmp = File::create("goal.tmp").expect("Could not create file \"goal.tmp\"");
-    let _ = goal_tmp.write_all(&format!("{}", line_count).into_bytes());
-    let _ = match remove_file("path.tmp") {
-        Ok(_) => {}
-        Err(_) => {}
-    };
-    let mut path_tmp = File::create("path.tmp").expect("Could not create file \"path.tmp\"");
-    let _ = path_tmp.write_all(&file.clone().into_bytes());
+    let mut goal_tmp = make_file("/tmp/gsd", "goal.tmp");
+    write_line(&mut goal_tmp, &line_count.to_string());
+    let mut path_tmp = make_file("/tmp/gsd", "path.tmp");
+    write_line(&mut path_tmp, &file);
 }
 
 fn check_file_unlock() {
-    let path = std::fs::read_to_string("path.tmp")
+    let mut path = std::fs::read_to_string("/tmp/gsd/path.tmp")
         .expect("Failed to open file path.tmp. This will only exist for a file-tracking session.");
-    let watched = File::open(path).expect("Failed to open watched file");
+    let watched = File::open(&trim_newline(&mut path)).expect(&format!("Failed to open watched file {}", &path));
     let buffered = BufReader::new(watched);
     let line_count = buffered.lines().count();
-    let goal = std::fs::read_to_string("goal.tmp")
-        .expect("Failed to open file goal.tmp. This will only exist for a file-tracking session.")
+    let goal = trim_newline(&mut std::fs::read_to_string("/tmp/gsd/goal.tmp")
+        .expect("Failed to open file goal.tmp. This will only exist for a file-tracking session."))
         .parse::<usize>()
         .unwrap();
     if line_count >= goal {
-        println!("Goal reached - congratulations! Unlocking files now. If this fails, try this command with sudo.");
+        println!("Goal reached - congratulations! Unlocking files now. You should get prompted to use sudo to update /etc/hosts and root crontab.");
 
-        let hosts_bak = std::fs::read_to_string("hosts.bak").expect("Failed to open hosts.bak");
-        let mut hosts_file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open("/etc/hosts")
-            .expect("Failed to open /etc/hosts - please run this program with sudo");
-        let _ = hosts_file.write_all(&hosts_bak.into_bytes());
-
-        Command::new("crontab")
-            .arg("cron.bak")
-            .spawn()
-            .expect("Command \"crontab cron.bak\" failed");
-        // LETSGOOOO THIS SHOULD WORK ON OTHER PEOPLE'S MACHINES NOW
-        let _ = match remove_file("restart.sh") {
-            Ok(_) => {}
-            Err(_) => {}
-        };
-        let mut restart = File::create("restart.sh").expect("Couldn't create restart.sh");
-        let config_contents =
-            std::fs::read_to_string("config.toml").expect("Failed to open config file");
-        let config: ConfigToml = toml::from_str(&config_contents).unwrap();
-        let _ = restart
-            .write_all(&format!("#!/bin/bash\n\n{}", config.system.network_command).into_bytes());
-        Command::new("chmod")
-            .arg("+x")
-            .arg("restart.sh")
-            .spawn()
-            .expect("Command chmod failed");
-        Command::new("bash")
-            .arg("-c")
-            .arg("./restart.sh")
-            .spawn()
-            .expect("Command bash failed");
-        let _ = match remove_file("path.tmp") {
-            Ok(_) => {}
-            Err(_) => {}
-        };
-        let _ = match remove_file("goal.tmp") {
-            Ok(_) => {}
-            Err(_) => {}
-        };
-        let _ = match remove_file("cron.bak") {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        let config: ConfigToml = open_config();
+        clean_file(&shellexpand::tilde("~/.config/gsd/restore.sh"));
+        let mut restore_script = make_file(&shellexpand::tilde("~/.config/gsd").to_string(), "restore.sh");
+        write_line(&mut restore_script, 
+            "#!/bin/bash\n\ncp /tmp/gsd/hosts.bak /etc/hosts\n");
+        write_line(&mut restore_script, &config.system.network_command);
+        drop(restore_script);
+        run_sudo_script(&shellexpand::tilde("~/.config/gsd/restore.sh"));
     } else {
         println!(
             "Write {} more lines to unblock apps and websites!",
@@ -394,7 +281,7 @@ fn int_parser(input: &str) -> IResult<&str, u32> {
     map_res(digit1, str::parse)(input)
 }
 
-fn parse_time(input: String) -> (u32, u32) {
+fn parse_time(input: &str) -> (u32, u32) {
     let mut parser = pair(
         opt(pair(int_parser, one_of("Hh"))),
         opt(pair(int_parser, one_of("Mm"))),
@@ -409,10 +296,87 @@ fn parse_time(input: String) -> (u32, u32) {
     (h.unwrap_or_default(), m.unwrap_or_default())
 }
 
-fn start_timed_session(time: String) {
+fn make_file(path:&str, file:&str) -> File {
+    if !Path::new(&path).exists() {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let full_file = format!("{}/{}", path, file);
+    OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(&full_file)
+        .expect(&format!("Was unable to open or create the file {}", full_file))
+}
+
+fn clean_file(file:&str) {
+    match remove_file(file) {
+        Ok(_) => {}
+        Err(_) => {}
+    };
+}
+
+fn find_cmd(cmd: &str) -> String {
+    let path_vec = String::from_utf8(Command::new("which")
+    .arg(cmd)
+    .output()
+    .expect(&format!("Failed to run command \"which {}\"", cmd))
+    .stdout);
+    let mut path = path_vec.expect(&format!("Failed to format to string for the output of \"which {}\"", cmd));
+    trim_newline(&mut path)
+}
+
+fn trim_newline(s: &mut String) -> String {
+    if s.ends_with('\n') {
+        s.pop();
+        if s.ends_with('\r') {
+            s.pop();
+        }
+    }
+    s.to_string()
+}
+
+fn run_sudo_script(script: &str) {
+    // todo get this part in a seperate fucking function
+    let mut edit = OpenOptions::new()
+    .write(true)
+    .append(true)
+    .create(true)
+    .open(script)
+    .expect(&format!("Was unable to open or create the file {}", script));
+    if let Err(e) = writeln!(edit, "crontab /tmp/gsd/cron.tmp") {
+        eprintln!("Couldn't write to file: {}", e);
+    }
+    drop(edit);
+    // ^ it's this part here that fucking sucks why did I put it in this functions
+    Command::new("chmod")
+    .arg("+x")
+    .arg(script)
+    .spawn()
+    .expect("Command chmod +x failed");
+    println!("This command needs to run sudo. This is so that it can update root crontabs, update /etc/hosts, and restart the network. If you want to know what this is running, please look at {}.", script);
+    let mut cmd = Command::new("sudo")
+        .arg(script)
+        .stdout(Stdio::inherit())
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect(&format!("Failed to run \"sudo {}\"", script));
+    cmd.wait().expect("cmd.wait failed... oops");
+}
+
+fn write_line(file: &mut File, line: &str) {
+    if let Err(e) = writeln!(file, "{}", line) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
+}
+
+fn start_timed_session(time: &str) {
+    clean_file(&shellexpand::tilde("~/.config/gsd/session.sh").to_string());
     update_hosts();
     update_cron_blocklist();
-    add_cron_time(time.clone());
+    add_cron_time(time);
+    run_sudo_script(&shellexpand::tilde("~/.config/gsd/session.sh").to_string());
     println!("Session started for {}. Stay productive!", time);
     exit(0)
 }

@@ -2,14 +2,14 @@
 
 ## What is this?
 
-This is a project that I wrote for the 2024 UQ Computing Society hackathon. I wrote this because I couldn't get work done as I kept on getting distracted by websites such as Discord, Reddit, GBATemp, and other social media/forum/messaging sites.
+This is a project that I wrote for the 2024 UQ Computing Society hackathon. I wrote this because I couldn't get work done as I kept on getting distracted by websites such as Discord, Reddit, GBATemp, and other social media/forum/messaging sites. Although it didn't win anything, I'm still proud of it as it is my first large project in Rust and I plan to update it more :)
 
 This will automate changes to crontabs and /etc/hosts so that it will unlock after you get some work done on a coding file, or after a certain amount of time. To use it, you need Linux, and a working cron daemon.
 
 ## How do I use it?
 
 First, make this using cargo. I'm very very new to cargo, `cargo build -r` *should* do what you need. You also need to set up a config file (detailed below) before using the app.
-To start a session, run `sudo ./gsd start` (or replace `./gsd` with whatever the name of the binary is), and then add flags for whether you want it to track time or a file. **This needs to be run under sudo** as it writes to /etc/hosts and restarts your network service! 
+To start a session, run `./gsd start` (or replace `./gsd` with whatever the name of the binary is), and then add flags for whether you want it to track time or a file. **This o longer needs to be run under sudo, but will explain it is calling sudo and ask for a password** as it writes to /etc/hosts, updates the root crontab and restarts your network service.
 
 ## How do I set it up?
 
@@ -19,8 +19,6 @@ Ideally, I want to make it so that you can set up entirely though commands: usin
 [system]
 # command to restart network service to refresh /etc/hosts. doesn't include sudo.
 network_command = 'systemctl restart dhcpcd'
-# path to where your binary is. this can also be changed with ./gsd directory [path].
-program_dir = "/home/berri/Documents/coding/get-shit-done"
 
 [blocklist]
 # make sure to include www. if it is part of the URL. check on a per-website basis: comapre
@@ -44,6 +42,7 @@ programs = [
 ## What are the limitations of this?
 
 - You need Linux. Sorry, fellow procrastinators who use Windows.
+- If you have some very unorthadox distrobution, it may not work. Quite a few assumtions are made - in an ideal world I'll only assume that you have crontabs, a /tmp folder, home directory, and some basic shell commands (i.e. sudo, rm, cp, crontab) however it **currently assumes that the command you need to run for restarting the network service is under /usr/bin**.
 - You can only track plaintext files. If you want 100 words written on some essay, then the track may not work for you.
 - On a similar note, this only works for lines, not words at the current moment. This may be changed as I have to write LaTeX files quite often...
 - It's easy to fudge. You can just write meaningless comments to increase line count to unlock websites, and there's nothing stopping you from reverting changes to crontabs and /etc/hosts. If you want this, there's a Perl program out there for you called Lockout: <https://thomer.com/lockout/> which will lock you out of root; this is however a big risk to take. get shit done is safer!
