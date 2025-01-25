@@ -1,4 +1,4 @@
-# get shit done: blocking websites and programs so you can, well, get shit done
+# get stuff done: blocking websites and programs so you can, well, get stuff done
 
 ## What is this?
 
